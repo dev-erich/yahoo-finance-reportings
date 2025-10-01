@@ -24,46 +24,39 @@ def get_next_earnings_for_ticker(ticker: str) -> dict:
     now = datetime.now(timezone.utc)
     try:
         t = yf.Ticker(ticker)
-        # Get a decent window of future+recent dates
         df = t.get_earnings_dates(limit=16)
-        # Some yfinance versions return index named 'Earnings Date'
-        # Ensure we always have a datetime column to filter/sort on.
+
         if df is None or len(df) == 0:
-            return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": "yfinance:get_earnings_dates", "got_upcoming": False}
+            return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": "yfinance:get_earnings_dates(empty)", "got_upcoming": False}
+
+        # Normalize date column/index
         if "Earnings Date" in df.columns:
-            # Older versions may put the datetime in a column
             dt_col = pd.to_datetime(df["Earnings Date"], errors="coerce", utc=True)
         else:
-            # Newer versions typically use the index for date
             dt_col = pd.to_datetime(df.index, errors="coerce", utc=True)
-        df = df.assign(_dt=dt_col)
-        df = df.dropna(subset=["_dt"])
 
-        # Some builds include "Time" or "Time Zone" info; standardize "When" if present.
-        when_col = None
-        for candidate in ["Time", "TimeOfDay", "When", "Time (ET)"]:
-            if candidate in df.columns:
-                when_col = candidate
-                break
+        df = df.assign(_dt=dt_col).dropna(subset=["_dt"])
 
-        # Upcoming dates (>= now); pick the soonest
+        # "When" column can be named differently across versions
+        when_col = next((c for c in ["Time", "TimeOfDay", "When", "Time (ET)"] if c in df.columns), None)
+
+        # Upcoming first, else most recent past
         upcoming = df[df["_dt"] >= now].sort_values("_dt")
         if len(upcoming) > 0:
             row = upcoming.iloc[0]
-            when = (str(row.get(when_col)) if when_col else None)
-            return {"ticker": ticker, "next_earnings_date": row["_dt"].isoformat(), "when": when, "source": "yfinance:get_earnings_dates", "got_upcoming": True}
+            return {"ticker": ticker, "next_earnings_date": row["_dt"].isoformat(), "when": (str(row.get(when_col)) if when_col else None), "source": "yfinance:get_earnings_dates", "got_upcoming": True}
 
-        # Fallback: most recent past
         past = df[df["_dt"] < now].sort_values("_dt")
         if len(past) > 0:
             row = past.iloc[-1]
-            when = (str(row.get(when_col)) if when_col else None)
-            return {"ticker": ticker, "next_earnings_date": row["_dt"].isoformat(), "when": when, "source": "yfinance:get_earnings_dates", "got_upcoming": False}
+            return {"ticker": ticker, "next_earnings_date": row["_dt"].isoformat(), "when": (str(row.get(when_col)) if when_col else None), "source": "yfinance:get_earnings_dates", "got_upcoming": False}
 
-        # Nothing usable
-        return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": "yfinance:get_earnings_dates", "got_upcoming": False}
+        return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": "yfinance:get_earnings_dates(no-dates)", "got_upcoming": False}
+
+    except ImportError as e:
+        return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": f"error:ImportError:{e}", "got_upcoming": False}
     except Exception as e:
-        return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": f"error:{type(e).__name__}", "got_upcoming": False}
+        return {"ticker": ticker, "next_earnings_date": None, "when": None, "source": f"error:{type(e).__name__}:{e}", "got_upcoming": False}
 
 def main():
     ap = argparse.ArgumentParser()
